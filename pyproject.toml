@@ -12,6 +12,10 @@ authors = [
   { name = "Robustness Testing Contributors" }
 ]
 license = { text = "MIT" }
+dependencies = [
+  "textattack>=0.3.0",
+  "editdistance"
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
