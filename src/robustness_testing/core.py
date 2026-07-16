@@ -111,15 +111,7 @@ class Mutation(ABC, Generic[InputT]):
         epsilon = self.validate_epsilon(epsilon)
 
         mutated = self.mutate(source, epsilon)
-        self.validate_source(mutated)
-        source.require_same_type_as(mutated)
-
-        actual_distance = self.distance(source, mutated)
-        if actual_distance > epsilon:
-            raise ValueError(
-                "mutation exceeded epsilon: "
-                f"distance={actual_distance}, epsilon={epsilon}"
-            )
+        self._validate_mutation(source, mutated, epsilon)
         return mutated
 
     @staticmethod
@@ -142,10 +134,45 @@ class Mutation(ABC, Generic[InputT]):
         if epsilon_float < 0.0:
             raise ValueError("epsilon must be non-negative")
         return epsilon_float
+    
+    def mutate_multiple_check_distance(self, source: InputT, epsilon: float) -> list[InputT]:
+        """Return a list of mutated inputs whose distance from ``source`` is at most epsilon."""
 
-    @abstractmethod
+        self.validate_source(source)
+        epsilon = self.validate_epsilon(epsilon)
+
+        mutated_list = self.mutate_multiple(source, epsilon)
+        for mutated in mutated_list:
+            self._validate_mutation(source, mutated, epsilon)
+        return mutated_list
+
     def mutate(self, source: InputT, epsilon: float) -> InputT:
         """Return a concrete mutation of ``source``."""
+        mutations = self.mutate_multiple(source, epsilon)
+        if not mutations:
+            raise ValueError("No mutations were possible.")
+        return mutations[0]
+
+    @abstractmethod
+    def mutate_multiple(self, source: InputT, epsilon: float) -> list[InputT]:
+        """Return a list of concrete mutations of ``source``."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement mutate_multiple()"
+        )
+    
+    def _validate_mutation(self, source: InputT, mutated: InputT, epsilon: float) -> None:
+        """Validate that a mutation is valid and within the distance threshold."""
+
+        self.validate_source(mutated)
+        source.require_same_type_as(mutated)
+        
+        actual_distance = self.distance(source, mutated)
+        if actual_distance > epsilon:
+            raise ValueError(
+                "mutation exceeded epsilon: "
+                f"distance={actual_distance}, epsilon={epsilon}"
+            )
 
 
 class SUT(ABC, Generic[InputT, OutputT]):
