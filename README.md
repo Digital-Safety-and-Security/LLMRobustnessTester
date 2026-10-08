@@ -140,7 +140,7 @@ result = tester.run(inputs, epsilon=2)
 search = tester.run(
     inputs, mode="search-epsilon", output_distance_threshold=3,
     min_epsilon=1, epsilon_step="double", max_iterations=5,
-    threshold_check="individual",
+    threshold_check="individual", clear_cache_each_iteration=True,
 )
 ```
 
@@ -157,7 +157,10 @@ must return one generated value per row in the same order.
 passing epsilon, and a stop reason. Results preserve source columns and add
 `Expected_Output`, `Generated_Output`, the output-distance measure, and distances
 to both expected and original outputs. Each original runs once per call to
-`run()`, with independent caches between runs. Baselines are excluded from the
+`run()` by default, with independent caches between runs. In epsilon search,
+`clear_cache_each_iteration=True` reruns all inputs selected at that epsilon,
+including each original baseline, which is useful for nondeterministic pipelines.
+Baselines are excluded from the
 maximum and global mutation-row average; thresholds are inclusive. Invalid
 output distances remain unavailable and cannot establish a passing bound.
 Bounds are empirical over the sampled inputs, not universal guarantees.

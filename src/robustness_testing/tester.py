@@ -154,7 +154,7 @@ class Tester:
     def run(
         self, inputs, *, mode="max-delta", epsilon=None, output_distance_threshold=None,
         threshold_check="individual", min_epsilon=1, epsilon_step="double", max_iterations=5,
-        generate_mutations=None, on_iteration=None,
+        generate_mutations=None, on_iteration=None, clear_cache_each_iteration=False,
     ) -> dict:
         """Return final Results and a robustness summary over sampled mutations.
 
@@ -181,6 +181,8 @@ class Tester:
             raise ValueError("Search requires an output threshold and uses min_epsilon, not epsilon")
         if generate_mutations is not None and (not search or not callable(generate_mutations)):
             raise ValueError("generate_mutations must be callable and requires search-epsilon mode")
+        if clear_cache_each_iteration and not search:
+            raise ValueError("clear_cache_each_iteration requires search-epsilon mode")
         if on_iteration is not None and not callable(on_iteration):
             raise TypeError("on_iteration must be callable")
         rows = self._validate_inputs(inputs)
@@ -203,6 +205,9 @@ class Tester:
             if coverage is not None and search and epsilon > coverage:
                 reason = "dataset_limit"
                 break
+            if clear_cache_each_iteration:
+                cached.clear()
+                original_outputs.clear()
             if generate_mutations is not None:
                 fresh = self._validate_inputs(generate_mutations(epsilon, iteration))
                 for row in fresh:
@@ -234,6 +239,7 @@ class Tester:
                     epsilon = Distance.validate_distance_value(epsilon * 2 if epsilon_step == "double" else epsilon + 1)
         return {
             "Mode": mode, "Generate_Mutations": generate_mutations is not None,
+            "Clear_Cache_Each_Iteration": clear_cache_each_iteration,
             "Input_Distance_Measure": rows[0]["Input_Distance_Measure"],
             "Output_Distance_Measure": type(self.output_distance).__name__,
             "Prepared_Input_Coverage_Limit": coverage, "Max_Tested_Passing_Epsilon": passing,
