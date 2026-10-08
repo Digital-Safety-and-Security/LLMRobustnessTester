@@ -50,18 +50,18 @@ class NegativeDistance(Distance[TextInput]):
 
 
 class IdentityMutation(Mutation[TextInput]):
-    def mutate(self, source: TextInput, epsilon: float) -> TextInput:
-        return source
+    def mutate_multiple(self, source: TextInput, epsilon: float) -> list[TextInput]:
+        return [source]
 
 
 class TooFarMutation(Mutation[TextInput]):
-    def mutate(self, source: TextInput, epsilon: float) -> TextInput:
-        return TextInput(source.value + "xx")
+    def mutate_multiple(self, source: TextInput, epsilon: float) -> list[TextInput]:
+        return [TextInput(source.value + "xx")]
 
 
 class WrongTypeMutation(Mutation[TextInput]):
-    def mutate(self, source: TextInput, epsilon: float) -> TextInput:
-        return OtherInput(source.value)  # type: ignore[return-value]
+    def mutate_multiple(self, source: TextInput, epsilon: float) -> list[TextInput]:
+        return [OtherInput(source.value)]  # type: ignore[list-item]
 
 
 class EchoSUT(SUT[TextInput, TextOutput]):

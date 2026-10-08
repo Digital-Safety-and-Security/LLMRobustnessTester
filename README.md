@@ -108,16 +108,22 @@ number, and mutation/distance labels. Column names can be adapted with
 class names; optional `metadata` labels record CLI aliases and transformations.
 Repeated and unchanged samples are retained; they are not guaranteed unique.
 
-The reference script uses the same class and standard-library CSV handling:
+The batch example uses the same class and standard-library CSV handling:
 
 ```bash
 python -m pip install -e .
-python mutate.py inputs.csv mutated.csv --max-distance 1 -n 5 --transformation WordSwapQWERTY
+python examples/mutate_batch.py inputs.csv mutated.csv --max-distance 1 -n 5 --transformation WordSwapQWERTY
 ```
 
 Use `--input-column text` for a differently named source column. TextAttack
 resources are loaded only when its mutation is invoked. `Mutator` itself uses
 only the standard library and does not import TextAttack or pandas.
+
+`examples/mutate_single.py` demonstrates mutating one `TextInput` directly. It
+creates a `WordEditDistance` and `RandomWordsMutation`, applies a TextAttack
+transformation within epsilon 3, and prints the original and mutated text. This
+small example uses TextAttack/Flair directly; unlike `mutate_batch.py`, it does
+not read or write CSV files.
 
 ## Testing a black-box pipeline
 
@@ -164,10 +170,10 @@ An optional `on_iteration(iteration, epsilon, results, observation)` callback
 can save result CSVs and add file paths to the observation; no storage format is
 imposed on model-specific results.
 
-The reference script demonstrates the uppercase callable without LTL or model
+The example script demonstrates the uppercase callable without LTL or model
 dependencies (its inputs need an `expected_output` column):
 
 ```bash
-python robustness.py --eval-files mutated.csv --epsilon 2
-python robustness.py --eval-files eps1.csv eps2.csv eps4.csv --mode search-epsilon --delta 3
+python examples/robustness.py --eval-files mutated.csv --epsilon 2
+python examples/robustness.py --eval-files eps1.csv eps2.csv eps4.csv --mode search-epsilon --delta 3
 ```
