@@ -16,6 +16,8 @@ The core abstractions are:
   object.
 - `Mutator`: generates annotated mutation datasets from text inputs while
   preserving reference outputs and arbitrary source columns.
+- `Tester`: loads prepared inputs, invokes a black-box pipeline, compares its
+  outputs to references and original-input outputs, and searches epsilon bounds.
 
 Concrete domains should subclass these contracts and implement only the
 domain-specific pieces. For example, a natural-language robustness benchmark
@@ -116,3 +118,56 @@ python mutate.py inputs.csv mutated.csv --max-distance 1 -n 5 --transformation W
 Use `--input-column text` for a differently named source column. TextAttack
 resources are loaded only when its mutation is invoked. `Mutator` itself uses
 only the standard library and does not import TextAttack or pandas.
+
+## Testing a black-box pipeline
+
+```python
+from robustness_testing import Tester, WordEditDistance
+
+def pipeline(text, row_data):
+    # Pass only the context your model needs; references are for evaluation.
+    return text.upper()
+
+tester = Tester(pipeline, WordEditDistance())
+inputs = tester.load_inputs(["mutated.csv"])
+result = tester.run(inputs, epsilon=2)
+search = tester.run(
+    inputs, mode="search-epsilon", output_distance_threshold=3,
+    min_epsilon=1, epsilon_step="double", max_iterations=5,
+    threshold_check="individual",
+)
+```
+
+The callable receives an input text and its dataset row, including any context
+columns. Default columns are `input`, `Original_Input`, and `expected_output`;
+all three names are configurable. Prepared datasets use `Mutator`'s mutation
+metadata. Generated and expected values are wrapped in `TextOutput` by default;
+inject `output_factory` and optionally `reference_factory` for structured values
+or project-specific `Output` subclasses. Inject any library or project-specific
+`Distance`. `batch_pipeline(rows)` is optional and useful for model reuse; it
+must return one generated value per row in the same order.
+
+`run()` returns final `Results`, an `Iterations` history, the maximum tested
+passing epsilon, and a stop reason. Results preserve source columns and add
+`Expected_Output`, `Generated_Output`, the output-distance measure, and distances
+to both expected and original outputs. Each original runs once per call to
+`run()`, with independent caches between runs. Baselines are excluded from the
+maximum and global mutation-row average; thresholds are inclusive. Invalid
+output distances remain unavailable and cannot establish a passing bound.
+Bounds are empirical over the sampled inputs, not universal guarantees.
+
+For fresh sampling at every search step, supply
+`generate_mutations(epsilon, iteration)`, returning prepared rows using a
+`Mutator` or another generator. Previous observations are retained. Without a
+generator, search is limited by each original's recorded generation coverage.
+An optional `on_iteration(iteration, epsilon, results, observation)` callback
+can save result CSVs and add file paths to the observation; no storage format is
+imposed on model-specific results.
+
+The reference script demonstrates the uppercase callable without LTL or model
+dependencies (its inputs need an `expected_output` column):
+
+```bash
+python robustness.py --eval-files mutated.csv --epsilon 2
+python robustness.py --eval-files eps1.csv eps2.csv eps4.csv --mode search-epsilon --delta 3
+```

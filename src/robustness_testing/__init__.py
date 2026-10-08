@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from robustness_testing.core import Distance, Input, Mutation, Output, SUT
 from robustness_testing.mutator import Mutator, TextInput
+from robustness_testing.tester import Tester, TextOutput
 
 if TYPE_CHECKING:
     from robustness_testing.distances import EditDistance, WordEditDistance
@@ -39,6 +40,8 @@ __all__ = [
     "Mutation",
     "Mutator",
     "TextInput",
+    "Tester",
+    "TextOutput",
     "Output",
     "SUT",
     "EditDistance",
