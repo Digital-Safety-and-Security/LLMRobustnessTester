@@ -51,9 +51,7 @@ class RandomWordsMutation(Mutation):
             new_sentences = []
             for current_sentence in current_sentences:
                 at = attacked_text(current_sentence)
-                transformed_texts = cast(
-                    list[AttackedText], self.transformation(at, indices_to_modify=[i])
-                )
+                transformed_texts = self.transformation(at, indices_to_modify=[i])
                 if len(transformed_texts) > 0:
                     new_sentences.extend([t.text for t in transformed_texts])
                 else:

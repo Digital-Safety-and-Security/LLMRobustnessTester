@@ -17,6 +17,22 @@ class MutationPresetTests(unittest.TestCase):
         self.module.import_module = Mock(side_effect=AssertionError("TextAttack imported eagerly"))
         self.assertEqual(self.module.random_word_swap_qwerty_mutation._transformation, "WordSwapQWERTY")
 
+    def test_mutation_runs_without_annotation_only_types_at_runtime(self):
+        from robustness_testing import TextInput
+
+        class AttackedText:
+            def __init__(self, text):
+                self.text = text
+
+        shared = ModuleType("textattack.shared")
+        shared.AttackedText = AttackedText
+        swap = Mock(return_value=[AttackedText("two")])
+        mutation = self.module.RandomWordsMutation(swap)
+        with patch.object(self.module, "import_module", return_value=shared):
+            result = mutation(TextInput("one"), epsilon=1)
+        self.assertEqual(result.value, "two")
+        self.assertEqual(swap.call_args.kwargs, {"indices_to_modify": [0]})
+
     def test_transformation_class_is_initialized_once_and_instances_still_work(self):
         constructed = Mock()
 
