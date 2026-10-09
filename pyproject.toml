@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "robustness-testing"
 version = "0.1.0"
 description = "Abstract contracts for robustness testing of generative AI systems and other systems under test."
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 readme = "README.md"
 authors = [
   { name = "Robustness Testing Contributors" }
