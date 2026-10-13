@@ -136,7 +136,9 @@ class Tester:
         for row in mutations:
             value = row["Output_Distance_To_Original_Output"]
             value = None if value is None else float(value)
-            distances.append(None if value is None or math.isnan(value) else Distance.validate_distance_value(value))
+            distances.append(None if value is None or math.isnan(value) else (
+                value if value == math.inf else Distance.validate_distance_value(value)
+            ))
         missing = sorted({row[original_input_column] for row in results} - {row[original_input_column] for row in mutations})
         complete = bool(distances) and all(value is not None for value in distances)
         maximum = max(distances) if complete else None
