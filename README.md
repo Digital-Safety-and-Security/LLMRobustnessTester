@@ -163,6 +163,12 @@ including each original baseline, which is useful for nondeterministic pipelines
 Baselines are excluded from the
 maximum and global mutation-row average; thresholds are inclusive. Invalid
 output distances remain unavailable and cannot establish a passing bound.
+Search continues when originals have no changed samples, even if there are no
+changed samples at all yet. Distances are computed over changed samples only;
+`Benchmarks_Without_Mutations` records missing coverage but does not prevent an
+epsilon from passing. Passing requires at least one changed sample and the
+checked distance to stay within the threshold. Unavailable distances
+for changed samples still stop the search, as does exceeding the threshold.
 Bounds are empirical over the sampled inputs, not universal guarantees.
 
 For fresh sampling at every search step, supply

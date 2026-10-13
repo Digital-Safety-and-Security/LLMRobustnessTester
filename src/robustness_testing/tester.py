@@ -138,7 +138,7 @@ class Tester:
             value = None if value is None else float(value)
             distances.append(None if value is None or math.isnan(value) else Distance.validate_distance_value(value))
         missing = sorted({row[original_input_column] for row in results} - {row[original_input_column] for row in mutations})
-        complete = bool(distances) and all(value is not None for value in distances) and not missing
+        complete = bool(distances) and all(value is not None for value in distances)
         maximum = max(distances) if complete else None
         average = math.fsum(value / len(distances) for value in distances) if complete else None
         checked = maximum if threshold_check == "individual" else average
@@ -227,14 +227,15 @@ class Tester:
             if on_iteration is not None:
                 on_iteration(iteration, epsilon, results, observation)
             history.append(observation)
-            if observation["Checked_Delta"] is None:
+            if observation["Checked_Delta"] is None and (not search or observation["Unavailable_Output_Distances"]):
                 reason = "incomplete_distances_or_benchmarks"
                 break
             if search:
-                if not observation["Threshold_Holds"]:
+                if observation["Threshold_Holds"] is False:
                     reason = "threshold_exceeded"
                     break
-                passing = epsilon
+                if observation["Threshold_Holds"]:
+                    passing = epsilon
                 if iteration < max_iterations:
                     epsilon = Distance.validate_distance_value(epsilon * 2 if epsilon_step == "double" else epsilon + 1)
         return {

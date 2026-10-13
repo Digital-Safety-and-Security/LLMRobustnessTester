@@ -113,7 +113,7 @@ class TesterTests(unittest.TestCase):
         self.assertEqual([row["Mutated_Rows"] for row in result["Iterations"]], [2, 4, 6])
         self.assertEqual(sum(call.args[0] == "a" for call in pipeline.call_args_list), 1)
 
-    def test_invalid_output_and_missing_benchmarks_do_not_pass(self):
+    def test_invalid_outputs_stop_search_and_missing_benchmarks_are_reported(self):
         class RejectInvalid(LengthDistance):
             def distance(self, left, right):
                 if "invalid" in (left.value, right.value):
@@ -131,6 +131,75 @@ class TesterTests(unittest.TestCase):
             [*prepared(), *prepared((2,), original="b")], epsilon=1,
         )
         self.assertEqual(result["Iterations"][0]["Benchmarks_Without_Mutations"], ["b"])
+
+    def test_search_passes_with_missing_benchmarks_and_continues(self):
+        for threshold_check in ("individual", "average"):
+            for fresh in (False, True):
+                with self.subTest(threshold_check=threshold_check, fresh=fresh):
+                    inputs = [*prepared((1,), original="a"), *prepared((2,), original="b")]
+                    def generate(epsilon, iteration):
+                        second = prepared((2,), original="b")[0]
+                        if epsilon < 2:
+                            second.update(input="b", Input_Distance_To_Original_Input=0)
+                        return [*prepared((1,)), second]
+                    result = Tester(lambda text, data: text, LengthDistance()).run(
+                        inputs, mode="search-epsilon", output_distance_threshold=10,
+                        threshold_check=threshold_check, max_iterations=2,
+                        generate_mutations=generate if fresh else None,
+                    )
+                    self.assertEqual([row["Epsilon"] for row in result["Iterations"]], [1, 2])
+                    self.assertEqual(result["Iterations"][0]["Benchmarks_Without_Mutations"], ["b"])
+                    self.assertEqual(result["Iterations"][1]["Benchmarks_Without_Mutations"], [])
+                    self.assertEqual(result["Max_Tested_Passing_Epsilon"], 2)
+                    self.assertEqual(result["Stop_Reason"], "iteration_limit")
+                    partial = Tester(lambda text, data: text, LengthDistance()).run(
+                        inputs, mode="search-epsilon", output_distance_threshold=10,
+                        threshold_check=threshold_check, max_iterations=1,
+                        generate_mutations=generate if fresh else None,
+                    )
+                    self.assertEqual(partial["Iterations"][0]["Benchmarks_Without_Mutations"], ["b"])
+                    self.assertTrue(partial["Iterations"][0]["Threshold_Holds"])
+                    self.assertEqual(partial["Max_Tested_Passing_Epsilon"], 1)
+
+    def test_search_with_no_changed_samples_does_not_claim_a_passing_bound(self):
+        unchanged = prepared((1,))[0]
+        unchanged.update(input="a", Input_Distance_To_Original_Input=0)
+        for later_mutation in (False, True):
+            with self.subTest(later_mutation=later_mutation):
+                result = Tester(lambda text, data: text, LengthDistance()).run(
+                    [unchanged], mode="search-epsilon", output_distance_threshold=10, max_iterations=2,
+                    generate_mutations=lambda epsilon, iteration: (
+                        prepared((2,)) if later_mutation and iteration == 2 else [unchanged]
+                    ),
+                )
+                self.assertEqual([row["Epsilon"] for row in result["Iterations"]], [1, 2])
+                self.assertIsNone(result["Iterations"][0]["Checked_Delta"])
+                self.assertIsNone(result["Iterations"][0]["Threshold_Holds"])
+                self.assertEqual(result["Stop_Reason"], "iteration_limit")
+                self.assertEqual(result["Max_Tested_Passing_Epsilon"], 2 if later_mutation else None)
+
+    def test_missing_benchmarks_do_not_hide_threshold_or_distance_failures(self):
+        inputs = [*prepared((1,)), *prepared((2,), original="b")]
+        for threshold_check in ("individual", "average"):
+            with self.subTest(threshold_check=threshold_check):
+                result = Tester(lambda text, data: text, LengthDistance()).run(
+                    inputs, mode="search-epsilon", output_distance_threshold=0,
+                    threshold_check=threshold_check,
+                )
+                self.assertEqual(result["Stop_Reason"], "threshold_exceeded")
+                self.assertEqual(len(result["Iterations"]), 1)
+                self.assertIsNone(result["Max_Tested_Passing_Epsilon"])
+        class RejectInvalid(LengthDistance):
+            def distance(self, left, right):
+                if "invalid" in (left.value, right.value):
+                    raise ValueError("invalid output")
+                return super().distance(left, right)
+        with self.assertWarns(RuntimeWarning):
+            result = Tester(lambda text, data: "invalid" if text == "ax" else text, RejectInvalid()).run(
+                inputs, mode="search-epsilon", output_distance_threshold=10,
+            )
+        self.assertEqual(result["Stop_Reason"], "incomplete_distances_or_benchmarks")
+        self.assertEqual(len(result["Iterations"]), 1)
 
     def test_custom_output_factories_and_batch_callable(self):
         batch = Mock(side_effect=lambda rows: [{"value": row["input"]} for row in rows])
