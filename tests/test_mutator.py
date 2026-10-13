@@ -26,7 +26,7 @@ class AppendMutation(Mutation):
 
 class MutatorTests(unittest.TestCase):
     def test_reference_script_uses_mutator_and_saves_inputs(self):
-        path = Path(__file__).parents[1] / "mutate.py"
+        path = Path(__file__).parents[1] / "examples" / "mutate_batch.py"
         spec = importlib.util.spec_from_file_location("mutator_example", path)
         example = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(example)

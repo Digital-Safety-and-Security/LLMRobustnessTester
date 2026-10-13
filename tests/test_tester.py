@@ -34,7 +34,7 @@ def prepared(distances=(1, 2, 4), original="a", limit=4):
 
 class TesterTests(unittest.TestCase):
     def test_reference_runner_loads_inputs_and_prints_results(self):
-        path = Path(__file__).parents[1] / "robustness.py"
+        path = Path(__file__).parents[1] / "examples" / "robustness.py"
         spec = importlib.util.spec_from_file_location("tester_example", path)
         example = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(example)
