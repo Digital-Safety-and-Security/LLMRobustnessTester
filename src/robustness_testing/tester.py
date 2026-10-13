@@ -128,7 +128,7 @@ class Tester:
         return results
 
     @staticmethod
-    def summarize(results, epsilon, threshold_check, threshold, *, input_column="input", original_input_column="Original_Input"):
+    def summarize(results, epsilon, threshold_check, threshold, *, input_column="input", original_input_column="Original_Input", stop_on_nan=False):
         if threshold_check not in ("individual", "average"):
             raise ValueError("threshold_check must be individual or average")
         mutations = [row for row in results if row[input_column] != row[original_input_column]]
@@ -140,7 +140,9 @@ class Tester:
                 value if value == math.inf else Distance.validate_distance_value(value)
             ))
         missing = sorted({row[original_input_column] for row in results} - {row[original_input_column] for row in mutations})
-        complete = bool(distances) and all(value is not None for value in distances)
+        unavailable = distances.count(None)
+        distances = [value for value in distances if value is not None]
+        complete = bool(distances) and not (stop_on_nan and unavailable)
         maximum = max(distances) if complete else None
         average = math.fsum(value / len(distances) for value in distances) if complete else None
         checked = maximum if threshold_check == "individual" else average
@@ -149,14 +151,14 @@ class Tester:
             "Threshold_Check": threshold_check, "Checked_Delta": checked,
             "Output_Distance_Threshold": threshold,
             "Threshold_Holds": checked <= threshold if checked is not None and threshold is not None else None,
-            "Mutated_Rows": len(mutations), "Unavailable_Output_Distances": distances.count(None),
+            "Mutated_Rows": len(mutations), "Unavailable_Output_Distances": unavailable,
             "Benchmarks_Without_Mutations": missing,
         }
 
     def run(
         self, inputs, *, mode="max-delta", epsilon=None, output_distance_threshold=None,
         threshold_check="individual", min_epsilon=1, epsilon_step="double", max_iterations=5,
-        generate_mutations=None, on_iteration=None, clear_cache_each_iteration=False,
+        generate_mutations=None, on_iteration=None, clear_cache_each_iteration=False, stop_on_nan=False,
     ) -> dict:
         """Return final Results and a robustness summary over sampled mutations.
 
@@ -164,6 +166,7 @@ class Tester:
         on_iteration(iteration, epsilon, results, observation) can persist them
         and add paths to the observation. Prior samples and baselines are reused.
         A run has independent caches, including when this Tester is reused.
+        NaN/None output distances are ignored unless stop_on_nan is enabled.
         """
         if mode not in ("max-delta", "search-epsilon"):
             raise ValueError("mode must be max-delta or search-epsilon")
@@ -225,11 +228,12 @@ class Tester:
                 cached.update(zip(pending, self._evaluate([suite[index] for index in pending], original_outputs)))
             results = [cached[index] for index in selected]
             observation = self.summarize(results, epsilon, threshold_check, output_distance_threshold,
-                                         input_column=self.input_column, original_input_column=self.original_input_column)
+                                         input_column=self.input_column, original_input_column=self.original_input_column,
+                                         stop_on_nan=stop_on_nan)
             if on_iteration is not None:
                 on_iteration(iteration, epsilon, results, observation)
             history.append(observation)
-            if observation["Checked_Delta"] is None and (not search or observation["Unavailable_Output_Distances"]):
+            if observation["Checked_Delta"] is None and (not search or (stop_on_nan and observation["Unavailable_Output_Distances"])):
                 reason = "incomplete_distances_or_benchmarks"
                 break
             if search:
@@ -243,6 +247,7 @@ class Tester:
         return {
             "Mode": mode, "Generate_Mutations": generate_mutations is not None,
             "Clear_Cache_Each_Iteration": clear_cache_each_iteration,
+            "Stop_On_NaN": stop_on_nan,
             "Input_Distance_Measure": rows[0]["Input_Distance_Measure"],
             "Output_Distance_Measure": type(self.output_distance).__name__,
             "Prepared_Input_Coverage_Limit": coverage, "Max_Tested_Passing_Epsilon": passing,

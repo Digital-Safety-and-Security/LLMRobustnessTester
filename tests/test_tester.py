@@ -45,13 +45,46 @@ class TesterTests(unittest.TestCase):
                 writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
                 writer.writeheader()
                 writer.writerows(rows)
-            with patch("sys.argv", [str(path), "--eval-files", str(source), "--epsilon", "2"]), \
+            with patch("sys.argv", [str(path), "--eval-files", str(source), "--epsilon", "2", "--stop-on-nan"]), \
                  patch("sys.stdout", new_callable=io.StringIO) as output:
                 example.main()
             result = json.loads(output.getvalue())
             self.assertEqual(result["Results"][0]["Generated_Output"], "A")
             self.assertEqual(len(result["Results"]), 3)
             self.assertEqual(result["Iterations"][0]["Max_Delta"], 1)
+            self.assertTrue(result["Stop_On_NaN"])
+
+    def test_nan_policy_controls_search_and_summary_statistics(self):
+        class NanDistance(LengthDistance):
+            def __call__(self, left, right):
+                return float("nan") if left.value == "ax" else super().__call__(left, right)
+
+        for threshold_check in ("individual", "average"):
+            for stop_on_nan in (False, True):
+                with self.subTest(threshold_check=threshold_check, stop_on_nan=stop_on_nan):
+                    result = Tester(lambda text, data: text, NanDistance()).run(
+                        prepared(), mode="search-epsilon", output_distance_threshold=2,
+                        threshold_check=threshold_check, stop_on_nan=stop_on_nan,
+                    )
+                    self.assertEqual(result["Stop_On_NaN"], stop_on_nan)
+                    self.assertEqual(result["Stop_Reason"],
+                                     "incomplete_distances_or_benchmarks" if stop_on_nan else "threshold_exceeded")
+                    self.assertEqual([row["Epsilon"] for row in result["Iterations"]],
+                                     [1] if stop_on_nan else [1, 2, 4])
+                    if not stop_on_nan:
+                        self.assertEqual(result["Iterations"][1]["Average_Delta"], 2)
+                        self.assertEqual(result["Iterations"][-1]["Average_Delta"], 3)
+                        self.assertEqual(result["Iterations"][-1]["Unavailable_Output_Distances"], 1)
+                        self.assertEqual(result["Max_Tested_Passing_Epsilon"], 2)
+
+        result = Tester(lambda text, data: text, NanDistance()).run(
+            prepared((1,)), mode="search-epsilon", output_distance_threshold=2,
+            generate_mutations=lambda epsilon, iteration: prepared((1,)), max_iterations=3,
+        )
+        self.assertEqual(len(result["Iterations"]), 3)
+        self.assertEqual(result["Stop_Reason"], "iteration_limit")
+        self.assertIsNone(result["Max_Tested_Passing_Epsilon"])
+        self.assertTrue(all(row["Checked_Delta"] is None for row in result["Iterations"]))
 
     def test_callable_receives_text_and_context_and_both_distances_are_computed(self):
         calls = []
@@ -122,7 +155,7 @@ class TesterTests(unittest.TestCase):
 
         with self.assertWarns(RuntimeWarning):
             result = Tester(lambda text, data: "a" if text == "a" else "invalid", RejectInvalid()).run(
-                prepared(), mode="search-epsilon", output_distance_threshold=100,
+                prepared(), mode="search-epsilon", output_distance_threshold=100, stop_on_nan=True,
             )
         self.assertEqual(result["Stop_Reason"], "incomplete_distances_or_benchmarks")
         self.assertIsNone(result["Iterations"][0]["Threshold_Holds"])
@@ -196,7 +229,7 @@ class TesterTests(unittest.TestCase):
                 return super().distance(left, right)
         with self.assertWarns(RuntimeWarning):
             result = Tester(lambda text, data: "invalid" if text == "ax" else text, RejectInvalid()).run(
-                inputs, mode="search-epsilon", output_distance_threshold=10,
+                inputs, mode="search-epsilon", output_distance_threshold=10, stop_on_nan=True,
             )
         self.assertEqual(result["Stop_Reason"], "incomplete_distances_or_benchmarks")
         self.assertEqual(len(result["Iterations"]), 1)

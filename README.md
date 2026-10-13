@@ -167,8 +167,12 @@ Search continues when originals have no changed samples, even if there are no
 changed samples at all yet. Distances are computed over changed samples only;
 `Benchmarks_Without_Mutations` records missing coverage but does not prevent an
 epsilon from passing. Passing requires at least one changed sample and the
-checked distance to stay within the threshold. Unavailable distances
-for changed samples still stop the search, as does exceeding the threshold.
+checked distance to stay within the threshold. NaN and None output distances are
+ignored in statistics by default, but counted in `Unavailable_Output_Distances`.
+If none remain, statistics stay unset and search continues without declaring a
+passing bound. Set `run(stop_on_nan=True)` (or `--stop-on-nan` in the example)
+to restore stopping on unavailable distances. Infinity still exceeds any finite
+threshold. Summaries record the policy in `Stop_On_NaN`.
 Bounds are empirical over the sampled inputs, not universal guarantees.
 
 For fresh sampling at every search step, supply
