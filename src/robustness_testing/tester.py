@@ -128,9 +128,12 @@ class Tester:
         return results
 
     @staticmethod
-    def summarize(results, epsilon, threshold_check, threshold, *, input_column="input", original_input_column="Original_Input", stop_on_nan=False):
-        if threshold_check not in ("individual", "average"):
-            raise ValueError("threshold_check must be individual or average")
+    def summarize(results, epsilon, threshold_check, threshold, *, input_column="input", original_input_column="Original_Input", stop_on_nan=False, max_exceedance_percentage=5):
+        if threshold_check not in ("individual", "average", "percentile"):
+            raise ValueError("threshold_check must be individual, average, or percentile")
+        max_exceedance_percentage = Distance.validate_distance_value(max_exceedance_percentage)
+        if max_exceedance_percentage > 100:
+            raise ValueError("max_exceedance_percentage must be between 0 and 100")
         mutations = [row for row in results if row[input_column] != row[original_input_column]]
         distances = []
         for row in mutations:
@@ -146,6 +149,17 @@ class Tester:
         maximum = max(distances) if complete else None
         average = math.fsum(value / len(distances) for value in distances) if complete else None
         checked = maximum if threshold_check == "individual" else average
+        percentile = {}
+        if threshold_check == "percentile":
+            allowed = math.floor(len(mutations) * max_exceedance_percentage / 100)
+            checked = (sorted(distances)[-allowed - 1] if allowed < len(distances) else 0.0) if complete else None
+            above = sum(value > threshold for value in distances) if threshold is not None else None
+            percentile = {
+                "Percentile_Delta": checked,
+                "Max_Exceedance_Percentage": max_exceedance_percentage,
+                "Outputs_Above_Threshold": above,
+                "Outputs_Above_Threshold_Percentage": 100 * above / len(mutations) if above is not None and mutations else None,
+            }
         return {
             "Epsilon": epsilon, "Max_Delta": maximum, "Average_Delta": average,
             "Threshold_Check": threshold_check, "Checked_Delta": checked,
@@ -153,12 +167,14 @@ class Tester:
             "Threshold_Holds": checked <= threshold if checked is not None and threshold is not None else None,
             "Mutated_Rows": len(mutations), "Unavailable_Output_Distances": unavailable,
             "Benchmarks_Without_Mutations": missing,
+            **percentile,
         }
 
     def run(
         self, inputs, *, mode="max-delta", epsilon=None, output_distance_threshold=None,
         threshold_check="individual", min_epsilon=1, epsilon_step="double", max_iterations=5,
         generate_mutations=None, on_iteration=None, clear_cache_each_iteration=False, stop_on_nan=False,
+        max_exceedance_percentage=5,
     ) -> dict:
         """Return final Results and a robustness summary over sampled mutations.
 
@@ -167,11 +183,16 @@ class Tester:
         and add paths to the observation. Prior samples and baselines are reused.
         A run has independent caches, including when this Tester is reused.
         NaN/None output distances are ignored unless stop_on_nan is enabled.
+        Percentile checks allow max_exceedance_percentage of mutated rows to
+        exceed the threshold; unavailable rows stay in this row denominator.
         """
         if mode not in ("max-delta", "search-epsilon"):
             raise ValueError("mode must be max-delta or search-epsilon")
-        if threshold_check not in ("individual", "average") or epsilon_step not in ("double", "add-one"):
+        if threshold_check not in ("individual", "average", "percentile") or epsilon_step not in ("double", "add-one"):
             raise ValueError("Invalid threshold_check or epsilon_step")
+        max_exceedance_percentage = Distance.validate_distance_value(max_exceedance_percentage)
+        if max_exceedance_percentage > 100:
+            raise ValueError("max_exceedance_percentage must be between 0 and 100")
         if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations < 1:
             raise ValueError("max_iterations must be a positive integer")
         min_epsilon = Distance.validate_distance_value(min_epsilon)
@@ -229,7 +250,7 @@ class Tester:
             results = [cached[index] for index in selected]
             observation = self.summarize(results, epsilon, threshold_check, output_distance_threshold,
                                          input_column=self.input_column, original_input_column=self.original_input_column,
-                                         stop_on_nan=stop_on_nan)
+                                         stop_on_nan=stop_on_nan, max_exceedance_percentage=max_exceedance_percentage)
             if on_iteration is not None:
                 on_iteration(iteration, epsilon, results, observation)
             history.append(observation)
@@ -248,6 +269,7 @@ class Tester:
             "Mode": mode, "Generate_Mutations": generate_mutations is not None,
             "Clear_Cache_Each_Iteration": clear_cache_each_iteration,
             "Stop_On_NaN": stop_on_nan,
+            "Max_Exceedance_Percentage": max_exceedance_percentage,
             "Input_Distance_Measure": rows[0]["Input_Distance_Measure"],
             "Output_Distance_Measure": type(self.output_distance).__name__,
             "Prepared_Input_Coverage_Limit": coverage, "Max_Tested_Passing_Epsilon": passing,

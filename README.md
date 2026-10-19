@@ -172,7 +172,25 @@ ignored in statistics by default, but counted in `Unavailable_Output_Distances`.
 If none remain, statistics stay unset and search continues without declaring a
 passing bound. Set `run(stop_on_nan=True)` (or `--stop-on-nan` in the example)
 to restore stopping on unavailable distances. Infinity still exceeds any finite
-threshold. Summaries record the policy in `Stop_On_NaN`.
+threshold under individual/average checks. Summaries record the policy in `Stop_On_NaN`.
+Use `threshold_check="percentile", max_exceedance_percentage=5` to continue
+epsilon search while at most 5% of individual mutated result rows have distance
+to the original output strictly above the configured output threshold. Search
+stops at the first iteration exceeding this percentage. Exactly 5% passes, and
+distances equal to the output threshold are within it. The percentage accepts
+values from 0 to 100 and defaults to 5. The example runner exposes these as
+`--threshold-check percentile --max-exceedance-percentage 5`.
+Repeated mutation rows count separately; baselines are excluded. Unavailable
+distances do not count as exceedances but stay in the mutated-row denominator,
+matching the reporting criterion. Thus with missing distances this is not a
+guarantee that 95% have known within-threshold outputs. No usable distances
+still means no passing bound, and `stop_on_nan=True` retains its stopping rule.
+Infinite distances count as exceedances and can be tolerated within the budget.
+Percentile observations include `Percentile_Delta` (also `Checked_Delta`),
+`Max_Exceedance_Percentage`, `Outputs_Above_Threshold`, and
+`Outputs_Above_Threshold_Percentage`. The percentile delta is the smallest
+non-negative observed-distance cutoff meeting the percentage budget, without
+interpolation; it is compared to the configured output threshold.
 Bounds are empirical over the sampled inputs, not universal guarantees.
 
 For fresh sampling at every search step, supply

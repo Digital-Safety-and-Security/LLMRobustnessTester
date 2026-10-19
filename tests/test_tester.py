@@ -33,6 +33,48 @@ def prepared(distances=(1, 2, 4), original="a", limit=4):
 
 
 class TesterTests(unittest.TestCase):
+    def test_percentile_search_allows_outliers_and_stops_on_exceeded_percentage(self):
+        template = prepared((1,))[0]
+        inputs = []
+        for epsilon, count in ((1, 20), (2, 1), (4, 1)):
+            for index in range(count):
+                inputs.append({**template, "input": f"changed-{epsilon}-{index}",
+                               "Input_Distance_To_Original_Input": epsilon,
+                               "test_output": "x" * (9 if epsilon > 1 or index == 19 else 2)})
+        for percentage, epsilons, passing in [(5, [1, 2], 1), (10, [1, 2, 4], 2), (0, [1], None)]:
+            with self.subTest(percentage=percentage):
+                result = Tester(lambda text, data: "" if text == "a" else data["test_output"], LengthDistance()).run(
+                    inputs, mode="search-epsilon", output_distance_threshold=2,
+                    threshold_check="percentile", max_exceedance_percentage=percentage,
+                )
+                self.assertEqual([row["Epsilon"] for row in result["Iterations"]], epsilons)
+                self.assertEqual(result["Max_Tested_Passing_Epsilon"], passing)
+                self.assertEqual(result["Stop_Reason"], "threshold_exceeded")
+                self.assertEqual(result["Max_Exceedance_Percentage"], percentage)
+                first = result["Iterations"][0]
+                self.assertEqual(first["Outputs_Above_Threshold"], 1)
+                self.assertEqual(first["Outputs_Above_Threshold_Percentage"], 5)
+                self.assertEqual(first["Percentile_Delta"], 9 if percentage == 0 else 2)
+                self.assertEqual(first["Max_Delta"], 9)
+
+    def test_percentile_summary_nan_infinity_and_boundaries(self):
+        def summarize(values, **kwargs):
+            results = [{"input": "a", "Original_Input": "a", "Output_Distance_To_Original_Output": 999}]
+            results.extend({"input": "changed", "Original_Input": "a", "Output_Distance_To_Original_Output": value} for value in values)
+            return Tester.summarize(results, 1, "percentile", 2, **kwargs)
+
+        summary = summarize([2] * 19 + [float("inf")])
+        self.assertTrue(summary["Threshold_Holds"])
+        self.assertEqual(summary["Percentile_Delta"], 2)
+        self.assertFalse(summarize([2] * 18 + [float("inf")] * 2)["Threshold_Holds"])
+        self.assertTrue(summarize([float("inf")], max_exceedance_percentage=100)["Threshold_Holds"])
+        self.assertTrue(summarize([2] * 18 + [9, None])["Threshold_Holds"])
+        self.assertIsNone(summarize([2] * 18 + [9, None], stop_on_nan=True)["Threshold_Holds"])
+        self.assertIsNone(summarize([None, float("nan")])["Threshold_Holds"])
+        self.assertIsNone(summarize([])["Threshold_Holds"])
+        self.assertEqual(summarize([2] * 20, max_exceedance_percentage=0)["Percentile_Delta"], 2)
+        self.assertFalse(summarize([2] * 19 + [9], max_exceedance_percentage=4.99)["Threshold_Holds"])
+
     def test_reference_runner_loads_inputs_and_prints_results(self):
         path = Path(__file__).parents[1] / "examples" / "robustness.py"
         spec = importlib.util.spec_from_file_location("tester_example", path)
@@ -45,7 +87,8 @@ class TesterTests(unittest.TestCase):
                 writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
                 writer.writeheader()
                 writer.writerows(rows)
-            with patch("sys.argv", [str(path), "--eval-files", str(source), "--epsilon", "2", "--stop-on-nan"]), \
+            with patch("sys.argv", [str(path), "--eval-files", str(source), "--epsilon", "2", "--stop-on-nan",
+                                    "--threshold-check", "percentile", "--max-exceedance-percentage", "7.5"]), \
                  patch("sys.stdout", new_callable=io.StringIO) as output:
                 example.main()
             result = json.loads(output.getvalue())
@@ -53,6 +96,8 @@ class TesterTests(unittest.TestCase):
             self.assertEqual(len(result["Results"]), 3)
             self.assertEqual(result["Iterations"][0]["Max_Delta"], 1)
             self.assertTrue(result["Stop_On_NaN"])
+            self.assertEqual(result["Max_Exceedance_Percentage"], 7.5)
+            self.assertEqual(result["Iterations"][0]["Threshold_Check"], "percentile")
 
     def test_nan_policy_controls_search_and_summary_statistics(self):
         class NanDistance(LengthDistance):
@@ -300,6 +345,7 @@ class TesterTests(unittest.TestCase):
         cases = [{"mode": "bad"}, {"mode": "search-epsilon"}, {"max_iterations": 0}, {"min_epsilon": 0},
                  {"threshold_check": "bad"}, {"epsilon_step": "bad"}, {"epsilon": -1}, {"output_distance_threshold": float("inf")},
                  {"generate_mutations": lambda epsilon, iteration: []}]
+        cases += [{"max_exceedance_percentage": value} for value in (-1, 101, float("nan"), float("inf"))]
         for options in cases:
             with self.subTest(options=options), self.assertRaises(ValueError):
                 tester.run(prepared(), **options)

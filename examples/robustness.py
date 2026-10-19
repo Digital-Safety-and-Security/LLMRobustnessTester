@@ -16,7 +16,9 @@ def main():
     parser.add_argument("--mode", choices=("max-delta", "search-epsilon"), default="max-delta")
     parser.add_argument("--epsilon", type=float)
     parser.add_argument("--delta", type=float)
-    parser.add_argument("--threshold-check", choices=("individual", "average"), default="individual")
+    parser.add_argument("--threshold-check", choices=("individual", "average", "percentile"), default="individual")
+    parser.add_argument("--max-exceedance-percentage", type=float, default=5,
+                        help="Allowed percentage of mutated rows above delta for percentile checks (default: 5).")
     parser.add_argument("--min-epsilon", type=float, default=1)
     parser.add_argument("--epsilon-step", choices=("double", "add-one"), default="double")
     parser.add_argument("--max-iterations", type=int, default=5)
@@ -28,6 +30,7 @@ def main():
         output_distance_threshold=args.delta, threshold_check=args.threshold_check,
         min_epsilon=args.min_epsilon, epsilon_step=args.epsilon_step, max_iterations=args.max_iterations,
         stop_on_nan=args.stop_on_nan,
+        max_exceedance_percentage=args.max_exceedance_percentage,
     )
     print(json.dumps(result, indent=2, allow_nan=False))
 
