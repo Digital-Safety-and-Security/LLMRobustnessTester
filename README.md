@@ -201,6 +201,22 @@ An optional `on_iteration(iteration, epsilon, results, observation)` callback
 can save result CSVs and add file paths to the observation; no storage format is
 imposed on model-specific results.
 
+Optionally set `run(wall_time_limit_hours=24)` (or `--wall-time-limit-hours 24`
+in the example) to bound an epsilon search. The default is no time limit.
+Time includes mutation generation, pipeline/model setup and distance calculations
+inside `run()`. At expiry the current iteration is aborted; completed iterations,
+their results and the last passing epsilon are retained. The returned
+`Stop_Reason` is `wall-time limit exceeded`; `Aborted_Iteration`, `Aborted_Epsilon`
+and `Wall_Time_Limit_Hours` record the interruption. Incomplete iteration rows
+are not returned. Persistence callbacks run without the alarm so files are not
+truncated; their elapsed time still counts toward the next iteration's deadline.
+If time expires while saving, the completed iteration is retained and no
+`Aborted_Iteration` is recorded.
+This uses Unix `SIGALRM` in the main thread and cannot share an existing alarm.
+Native extensions that do not return control to Python can delay interruption;
+this is not a process-killing scheduler limit. Allow extra scheduler time for
+saving reports after cancellation.
+
 The example script demonstrates the uppercase callable without LTL or model
 dependencies (its inputs need an `expected_output` column):
 

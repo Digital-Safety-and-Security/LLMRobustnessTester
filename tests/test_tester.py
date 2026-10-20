@@ -2,6 +2,8 @@ import csv
 import importlib.util
 import io
 import json
+import signal
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -33,6 +35,80 @@ def prepared(distances=(1, 2, 4), original="a", limit=4):
 
 
 class TesterTests(unittest.TestCase):
+    def test_wall_time_limit_aborts_pipeline_and_preserves_completed_iterations(self):
+        for clear_cache in (False, True):
+            with self.subTest(clear_cache=clear_cache):
+                calls, saved = [], []
+
+                def pipeline(rows):
+                    calls.append([row["input"] for row in rows])
+                    if len(calls) == 2:
+                        try:
+                            time.sleep(2)
+                        except Exception:
+                            self.fail("Cancellation must bypass pipeline Exception handlers")
+                    return [row["input"] for row in rows]
+
+                handler = signal.getsignal(signal.SIGALRM)
+                started = time.monotonic()
+                result = Tester(lambda text, row: text, LengthDistance(), batch_pipeline=pipeline).run(
+                    prepared(), mode="search-epsilon", output_distance_threshold=100,
+                    clear_cache_each_iteration=clear_cache, wall_time_limit_hours=0.2 / 3600,
+                    on_iteration=lambda iteration, epsilon, rows, observation: saved.append(iteration),
+                )
+                self.assertLess(time.monotonic() - started, 1.5)
+                self.assertEqual(result["Stop_Reason"], "wall-time limit exceeded")
+                self.assertEqual(result["Aborted_Iteration"], 2)
+                self.assertEqual(result["Aborted_Epsilon"], 2)
+                self.assertEqual(result["Max_Tested_Passing_Epsilon"], 1)
+                self.assertEqual([row["Epsilon"] for row in result["Iterations"]], [1])
+                self.assertEqual([row["input"] for row in result["Results"]], ["a", "ax"])
+                self.assertEqual(saved, [1])
+                self.assertEqual(signal.getsignal(signal.SIGALRM), handler)
+                self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0, 0))
+
+    def test_wall_time_limit_during_generation_and_before_any_result(self):
+        def slow_generation(epsilon, iteration):
+            time.sleep(2)
+            return prepared((1,))
+
+        pipeline = Mock()
+        result = Tester(pipeline, LengthDistance()).run(
+            prepared(), mode="search-epsilon", output_distance_threshold=100,
+            generate_mutations=slow_generation, wall_time_limit_hours=0.05 / 3600,
+        )
+        self.assertEqual(result["Stop_Reason"], "wall-time limit exceeded")
+        self.assertEqual(result["Aborted_Iteration"], 1)
+        self.assertEqual(result["Results"], [])
+        self.assertEqual(result["Iterations"], [])
+        self.assertIsNone(result["Max_Tested_Passing_Epsilon"])
+        pipeline.assert_not_called()
+
+    def test_wall_time_limit_does_not_interrupt_persistence_and_restores_timer_on_errors(self):
+        saved = []
+
+        def persist(iteration, epsilon, rows, observation):
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0, 0))
+            time.sleep(0.05)
+            saved.append(iteration)
+
+        result = Tester(lambda text, data: text, LengthDistance()).run(
+            prepared(), mode="search-epsilon", output_distance_threshold=100,
+            wall_time_limit_hours=0.02 / 3600, on_iteration=persist,
+        )
+        self.assertEqual(saved, [1])
+        self.assertEqual(result["Stop_Reason"], "wall-time limit exceeded")
+        self.assertEqual(len(result["Iterations"]), 1)
+        self.assertIsNone(result["Aborted_Iteration"])
+        self.assertEqual(result["Max_Tested_Passing_Epsilon"], 1)
+        handler = signal.getsignal(signal.SIGALRM)
+        with self.assertRaisesRegex(RuntimeError, "pipeline failure"):
+            Tester(Mock(side_effect=RuntimeError("pipeline failure")), LengthDistance()).run(
+                prepared(), mode="search-epsilon", output_distance_threshold=100, wall_time_limit_hours=1,
+            )
+        self.assertEqual(signal.getsignal(signal.SIGALRM), handler)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0, 0))
+
     def test_percentile_search_allows_outliers_and_stops_on_exceeded_percentage(self):
         template = prepared((1,))[0]
         inputs = []
@@ -98,6 +174,12 @@ class TesterTests(unittest.TestCase):
             self.assertTrue(result["Stop_On_NaN"])
             self.assertEqual(result["Max_Exceedance_Percentage"], 7.5)
             self.assertEqual(result["Iterations"][0]["Threshold_Check"], "percentile")
+            self.assertIsNone(result["Wall_Time_Limit_Hours"])
+            with patch("sys.argv", [str(path), "--eval-files", str(source), "--mode", "search-epsilon",
+                                    "--delta", "100", "--wall-time-limit-hours", "1"]), \
+                 patch("sys.stdout", new_callable=io.StringIO) as output:
+                example.main()
+            self.assertEqual(json.loads(output.getvalue())["Wall_Time_Limit_Hours"], 1)
 
     def test_nan_policy_controls_search_and_summary_statistics(self):
         class NanDistance(LengthDistance):
@@ -346,6 +428,9 @@ class TesterTests(unittest.TestCase):
                  {"threshold_check": "bad"}, {"epsilon_step": "bad"}, {"epsilon": -1}, {"output_distance_threshold": float("inf")},
                  {"generate_mutations": lambda epsilon, iteration: []}]
         cases += [{"max_exceedance_percentage": value} for value in (-1, 101, float("nan"), float("inf"))]
+        cases += [{"mode": "search-epsilon", "output_distance_threshold": 100, "wall_time_limit_hours": value}
+                  for value in (0, -1, float("nan"), float("inf"), 1e308)]
+        cases.append({"wall_time_limit_hours": 1})
         for options in cases:
             with self.subTest(options=options), self.assertRaises(ValueError):
                 tester.run(prepared(), **options)

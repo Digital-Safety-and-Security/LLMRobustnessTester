@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--min-epsilon", type=float, default=1)
     parser.add_argument("--epsilon-step", choices=("double", "add-one"), default="double")
     parser.add_argument("--max-iterations", type=int, default=5)
+    parser.add_argument("--wall-time-limit-hours", type=float,
+                        help="Abort epsilon search after this many hours (default: no limit; Unix main thread).")
     parser.add_argument("--stop-on-nan", action="store_true", help="Stop on unavailable output distances instead of ignoring them.")
     args = parser.parse_args()
     tester = Tester(pipeline, WordEditDistance())
@@ -31,6 +33,7 @@ def main():
         min_epsilon=args.min_epsilon, epsilon_step=args.epsilon_step, max_iterations=args.max_iterations,
         stop_on_nan=args.stop_on_nan,
         max_exceedance_percentage=args.max_exceedance_percentage,
+        wall_time_limit_hours=args.wall_time_limit_hours,
     )
     print(json.dumps(result, indent=2, allow_nan=False))
 

@@ -3,14 +3,48 @@
 from __future__ import annotations
 
 import csv
+from contextlib import contextmanager
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import signal
+import threading
+import time
 from typing import Any, Callable, Iterable, Mapping
 import warnings
 
 from .core import Distance, Output
 from .mutator import MUTATION_METADATA_COLUMNS
+
+
+class _WallTimeLimitExceeded(BaseException):
+    # Pipeline handlers catching Exception must not swallow cancellation.
+    pass
+
+
+@contextmanager
+def _wall_time_limit(deadline):
+    if deadline is None:
+        yield
+        return
+    if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
+        raise ValueError("Wall-time limits require a Unix main-thread runner")
+    if signal.getitimer(signal.ITIMER_REAL)[0]:
+        raise ValueError("Wall-time limits cannot share an active SIGALRM timer")
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _WallTimeLimitExceeded
+
+    def interrupt(signum, frame):
+        raise _WallTimeLimitExceeded
+
+    previous = signal.signal(signal.SIGALRM, interrupt)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 @dataclass(frozen=True)
@@ -174,7 +208,7 @@ class Tester:
         self, inputs, *, mode="max-delta", epsilon=None, output_distance_threshold=None,
         threshold_check="individual", min_epsilon=1, epsilon_step="double", max_iterations=5,
         generate_mutations=None, on_iteration=None, clear_cache_each_iteration=False, stop_on_nan=False,
-        max_exceedance_percentage=5,
+        max_exceedance_percentage=5, wall_time_limit_hours=None,
     ) -> dict:
         """Return final Results and a robustness summary over sampled mutations.
 
@@ -185,7 +219,11 @@ class Tester:
         NaN/None output distances are ignored unless stop_on_nan is enabled.
         Percentile checks allow max_exceedance_percentage of mutated rows to
         exceed the threshold; unavailable rows stay in this row denominator.
+        wall_time_limit_hours optionally aborts an in-progress search iteration
+        using SIGALRM (Unix/main thread). Only completed iterations are returned.
+        Persistence callbacks run without the alarm so saved files stay intact.
         """
+        started = time.monotonic()
         if mode not in ("max-delta", "search-epsilon"):
             raise ValueError("mode must be max-delta or search-epsilon")
         if threshold_check not in ("individual", "average", "percentile") or epsilon_step not in ("double", "add-one"):
@@ -203,6 +241,11 @@ class Tester:
         if output_distance_threshold is not None:
             output_distance_threshold = Distance.validate_distance_value(output_distance_threshold)
         search = mode == "search-epsilon"
+        if wall_time_limit_hours is not None:
+            wall_time_limit_hours = Distance.validate_distance_value(wall_time_limit_hours)
+            if not search or wall_time_limit_hours == 0 or not math.isfinite(wall_time_limit_hours * 3600):
+                raise ValueError("wall_time_limit_hours must be positive and requires search-epsilon mode")
+        deadline = None if wall_time_limit_hours is None else started + wall_time_limit_hours * 3600
         if search and (output_distance_threshold is None or epsilon is not None):
             raise ValueError("Search requires an output threshold and uses min_epsilon, not epsilon")
         if generate_mutations is not None and (not search or not callable(generate_mutations)):
@@ -226,34 +269,47 @@ class Tester:
             suite.extend(row for row in rows if row[self.input_column] != row[self.original_input_column])
         cached, original_outputs, history, results = {}, {}, [], []
         passing = None
+        aborted_iteration = None
         reason = "iteration_limit" if search else "completed"
         for iteration in range(1, (max_iterations if search else 1) + 1):
             if coverage is not None and search and epsilon > coverage:
                 reason = "dataset_limit"
                 break
-            if clear_cache_each_iteration:
-                cached.clear()
-                original_outputs.clear()
-            if generate_mutations is not None:
-                fresh = self._validate_inputs(generate_mutations(epsilon, iteration))
-                for row in fresh:
-                    original = row[self.original_input_column]
-                    if original not in originals or row[self.expected_output_column] != originals[original][self.expected_output_column]:
-                        raise ValueError("Generated inputs must preserve the original inputs and reference outputs")
-                    if row["Input_Distance_Measure"] != rows[0]["Input_Distance_Measure"] or row["Input_Distance_To_Original_Input"] > epsilon:
-                        raise ValueError("Generated input distances must use the configured measure and stay within epsilon")
-                suite.extend(row for row in fresh if row[self.input_column] != row[self.original_input_column])
-            selected = [index for index, row in enumerate(suite) if row["Input_Distance_To_Original_Input"] <= epsilon]
-            pending = [index for index in selected if index not in cached]
-            if pending:
-                cached.update(zip(pending, self._evaluate([suite[index] for index in pending], original_outputs)))
-            results = [cached[index] for index in selected]
-            observation = self.summarize(results, epsilon, threshold_check, output_distance_threshold,
-                                         input_column=self.input_column, original_input_column=self.original_input_column,
-                                         stop_on_nan=stop_on_nan, max_exceedance_percentage=max_exceedance_percentage)
+            try:
+                with _wall_time_limit(deadline):
+                    if clear_cache_each_iteration:
+                        cached.clear()
+                        original_outputs.clear()
+                    if generate_mutations is not None:
+                        fresh = self._validate_inputs(generate_mutations(epsilon, iteration))
+                        for row in fresh:
+                            original = row[self.original_input_column]
+                            if original not in originals or row[self.expected_output_column] != originals[original][self.expected_output_column]:
+                                raise ValueError("Generated inputs must preserve the original inputs and reference outputs")
+                            if row["Input_Distance_Measure"] != rows[0]["Input_Distance_Measure"] or row["Input_Distance_To_Original_Input"] > epsilon:
+                                raise ValueError("Generated input distances must use the configured measure and stay within epsilon")
+                        suite.extend(row for row in fresh if row[self.input_column] != row[self.original_input_column])
+                    selected = [index for index, row in enumerate(suite) if row["Input_Distance_To_Original_Input"] <= epsilon]
+                    pending = [index for index in selected if index not in cached]
+                    if pending:
+                        cached.update(zip(pending, self._evaluate([suite[index] for index in pending], original_outputs)))
+                    iteration_results = [cached[index] for index in selected]
+                    observation = self.summarize(iteration_results, epsilon, threshold_check, output_distance_threshold,
+                                                 input_column=self.input_column, original_input_column=self.original_input_column,
+                                                 stop_on_nan=stop_on_nan, max_exceedance_percentage=max_exceedance_percentage)
+            except _WallTimeLimitExceeded:
+                reason = "wall-time limit exceeded"
+                aborted_iteration = iteration
+                break
+            results = iteration_results
             if on_iteration is not None:
                 on_iteration(iteration, epsilon, results, observation)
             history.append(observation)
+            if deadline is not None and time.monotonic() >= deadline:
+                if observation["Threshold_Holds"]:
+                    passing = epsilon
+                reason = "wall-time limit exceeded"
+                break
             if observation["Checked_Delta"] is None and (not search or (stop_on_nan and observation["Unavailable_Output_Distances"])):
                 reason = "incomplete_distances_or_benchmarks"
                 break
@@ -270,6 +326,9 @@ class Tester:
             "Clear_Cache_Each_Iteration": clear_cache_each_iteration,
             "Stop_On_NaN": stop_on_nan,
             "Max_Exceedance_Percentage": max_exceedance_percentage,
+            "Wall_Time_Limit_Hours": wall_time_limit_hours,
+            "Aborted_Iteration": aborted_iteration,
+            "Aborted_Epsilon": epsilon if aborted_iteration is not None else None,
             "Input_Distance_Measure": rows[0]["Input_Distance_Measure"],
             "Output_Distance_Measure": type(self.output_distance).__name__,
             "Prepared_Input_Coverage_Limit": coverage, "Max_Tested_Passing_Epsilon": passing,
