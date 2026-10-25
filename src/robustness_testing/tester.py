@@ -182,20 +182,19 @@ class Tester:
         complete = bool(distances) and not (stop_on_nan and unavailable)
         maximum = max(distances) if complete else None
         average = math.fsum(value / len(distances) for value in distances) if complete else None
-        checked = maximum if threshold_check == "individual" else average
+        allowed = math.floor(len(mutations) * max_exceedance_percentage / 100)
+        percentile_delta = (sorted(distances)[-allowed - 1] if allowed < len(distances) else 0.0) if complete else None
+        checked = {"individual": maximum, "average": average, "percentile": percentile_delta}[threshold_check]
         percentile = {}
         if threshold_check == "percentile":
-            allowed = math.floor(len(mutations) * max_exceedance_percentage / 100)
-            checked = (sorted(distances)[-allowed - 1] if allowed < len(distances) else 0.0) if complete else None
             above = sum(value > threshold for value in distances) if threshold is not None else None
             percentile = {
-                "Percentile_Delta": checked,
-                "Max_Exceedance_Percentage": max_exceedance_percentage,
                 "Outputs_Above_Threshold": above,
                 "Outputs_Above_Threshold_Percentage": 100 * above / len(mutations) if above is not None and mutations else None,
             }
         return {
             "Epsilon": epsilon, "Max_Delta": maximum, "Average_Delta": average,
+            "Percentile_Delta": percentile_delta, "Max_Exceedance_Percentage": max_exceedance_percentage,
             "Threshold_Check": threshold_check, "Checked_Delta": checked,
             "Output_Distance_Threshold": threshold,
             "Threshold_Holds": checked <= threshold if checked is not None and threshold is not None else None,
@@ -217,6 +216,8 @@ class Tester:
         and add paths to the observation. Prior samples and baselines are reused.
         A run has independent caches, including when this Tester is reused.
         NaN/None output distances are ignored unless stop_on_nan is enabled.
+        Every observation includes Max_Delta, Average_Delta and Percentile_Delta,
+        including the single observation returned by max-delta mode.
         Percentile checks allow max_exceedance_percentage of mutated rows to
         exceed the threshold; unavailable rows stay in this row denominator.
         wall_time_limit_hours optionally aborts an in-progress search iteration
@@ -281,7 +282,8 @@ class Tester:
                         cached.clear()
                         original_outputs.clear()
                     if generate_mutations is not None:
-                        fresh = self._validate_inputs(generate_mutations(epsilon, iteration))
+                        fresh = list(generate_mutations(epsilon, iteration))
+                        fresh = self._validate_inputs(fresh) if fresh else []
                         for row in fresh:
                             original = row[self.original_input_column]
                             if original not in originals or row[self.expected_output_column] != originals[original][self.expected_output_column]:

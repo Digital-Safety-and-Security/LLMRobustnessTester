@@ -35,6 +35,47 @@ def prepared(distances=(1, 2, 4), original="a", limit=4):
 
 
 class TesterTests(unittest.TestCase):
+    def test_search_continues_after_empty_generated_rounds(self):
+        for later_mutation in (False, True):
+            with self.subTest(later_mutation=later_mutation):
+                pipeline = Mock(side_effect=lambda text, row: text)
+                result = Tester(pipeline, LengthDistance()).run(
+                    prepared(), mode="search-epsilon", output_distance_threshold=100, max_iterations=2,
+                    generate_mutations=lambda epsilon, iteration: (
+                        prepared((2,)) if later_mutation and iteration == 2 else []
+                    ),
+                )
+                self.assertEqual(result["Stop_Reason"], "iteration_limit")
+                self.assertEqual([row["Mutated_Rows"] for row in result["Iterations"]], [0, 1 if later_mutation else 0])
+                self.assertEqual(result["Max_Tested_Passing_Epsilon"], 2 if later_mutation else None)
+                self.assertEqual(pipeline.call_count, 2 if later_mutation else 1)
+
+    def test_max_delta_reports_all_estimates_without_repeating_pipeline_calls(self):
+        template = prepared((1,))[0]
+        inputs = [{**template, "input": f"mutation-{index}", "test_output": "x" * distance}
+                  for index, distance in enumerate([2] * 19 + [9])]
+        for check in ("individual", "average", "percentile"):
+            for percentage, expected in ((0, 9), (5, 2), (50, 2), (100, 0)):
+                with self.subTest(check=check, percentage=percentage):
+                    pipeline = Mock(side_effect=lambda text, row: "" if text == "a" else row["test_output"])
+                    result = Tester(pipeline, LengthDistance()).run(
+                        inputs, threshold_check=check, max_exceedance_percentage=percentage,
+                    )
+                    result = json.loads(json.dumps(result, allow_nan=False))
+                    self.assertEqual(result["Mode"], "max-delta")
+                    self.assertEqual(result["Stop_Reason"], "completed")
+                    self.assertEqual(len(result["Iterations"]), 1)
+                    observation = result["Iterations"][0]
+                    self.assertEqual(observation["Max_Delta"], 9)
+                    self.assertAlmostEqual(observation["Average_Delta"], 2.35)
+                    self.assertEqual(observation["Percentile_Delta"], expected)
+                    self.assertEqual(observation["Max_Exceedance_Percentage"], percentage)
+                    self.assertEqual(observation["Checked_Delta"],
+                                     observation[{"individual": "Max_Delta", "average": "Average_Delta",
+                                                  "percentile": "Percentile_Delta"}[check]])
+                    self.assertIsNone(observation["Threshold_Holds"])
+                    self.assertEqual(pipeline.call_count, 21)
+
     def test_wall_time_limit_aborts_pipeline_and_preserves_completed_iterations(self):
         for clear_cache in (False, True):
             with self.subTest(clear_cache=clear_cache):
@@ -150,6 +191,16 @@ class TesterTests(unittest.TestCase):
         self.assertIsNone(summarize([])["Threshold_Holds"])
         self.assertEqual(summarize([2] * 20, max_exceedance_percentage=0)["Percentile_Delta"], 2)
         self.assertFalse(summarize([2] * 19 + [9], max_exceedance_percentage=4.99)["Threshold_Holds"])
+        for check in ("individual", "average", "percentile"):
+            for values, expected in (([2] * 19 + [float("inf")], 2), ([2] * 18 + [9, None], 2),
+                                     ([None, float("nan")], None), ([], None)):
+                rows = [{"input": "a", "Original_Input": "a", "Output_Distance_To_Original_Output": 999}]
+                rows.extend({"input": "changed", "Original_Input": "a", "Output_Distance_To_Original_Output": value}
+                            for value in values)
+                with self.subTest(check=check, values=values):
+                    self.assertEqual(Tester.summarize(rows, 1, check, None)["Percentile_Delta"], expected)
+                    if None in values:
+                        self.assertIsNone(Tester.summarize(rows, 1, check, None, stop_on_nan=True)["Percentile_Delta"])
 
     def test_reference_runner_loads_inputs_and_prints_results(self):
         path = Path(__file__).parents[1] / "examples" / "robustness.py"
@@ -171,6 +222,8 @@ class TesterTests(unittest.TestCase):
             self.assertEqual(result["Results"][0]["Generated_Output"], "A")
             self.assertEqual(len(result["Results"]), 3)
             self.assertEqual(result["Iterations"][0]["Max_Delta"], 1)
+            self.assertEqual(result["Iterations"][0]["Average_Delta"], 1)
+            self.assertEqual(result["Iterations"][0]["Percentile_Delta"], 1)
             self.assertTrue(result["Stop_On_NaN"])
             self.assertEqual(result["Max_Exceedance_Percentage"], 7.5)
             self.assertEqual(result["Iterations"][0]["Threshold_Check"], "percentile")

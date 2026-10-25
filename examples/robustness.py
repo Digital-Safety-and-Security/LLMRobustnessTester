@@ -18,7 +18,7 @@ def main():
     parser.add_argument("--delta", type=float)
     parser.add_argument("--threshold-check", choices=("individual", "average", "percentile"), default="individual")
     parser.add_argument("--max-exceedance-percentage", type=float, default=5,
-                        help="Allowed percentage of mutated rows above delta for percentile checks (default: 5).")
+                        help="Allowed percentage above the estimated percentile delta (both modes; default: 5).")
     parser.add_argument("--min-epsilon", type=float, default=1)
     parser.add_argument("--epsilon-step", choices=("double", "add-one"), default="double")
     parser.add_argument("--max-iterations", type=int, default=5)
