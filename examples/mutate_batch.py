@@ -13,12 +13,14 @@ def main():
     parser.add_argument("--input-column", default="input")
     parser.add_argument("--max-distance", "--epsilon", type=float, required=True)
     parser.add_argument("--num-mutations", "-n", type=int, default=1)
+    parser.add_argument("--max-attempts", type=int, default=100,
+                        help="Maximum mutation calls per original input (default: 100).")
     parser.add_argument("--transformation", default="WordSwapQWERTY")
     args = parser.parse_args()
 
     mutation = RandomWordsMutation(args.transformation, distance=WordEditDistance())
     mutator = Mutator(mutation, input_column=args.input_column, metadata={"Transformation": args.transformation})
-    rows = mutator.mutate_csv(args.input_file, args.output_file, args.max_distance, args.num_mutations)
+    rows = mutator.mutate_csv(args.input_file, args.output_file, args.max_distance, args.num_mutations, args.max_attempts)
     print(f"Saved {len(rows)} mutated inputs to {args.output_file}")
 
 

@@ -6,6 +6,7 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Generic, Iterable, Mapping
+import warnings
 
 from .core import Input, InputT, Mutation
 
@@ -29,8 +30,8 @@ class Mutator(Generic[InputT]):
     """Mutate dataset rows while preserving reference outputs and other columns.
 
     Inject any Mutation implementation and, if needed, its concrete Input
-    wrapper. Each source row produces num_mutations samples; repeated or
-    unchanged samples are retained.
+    wrapper. Each source row targets num_mutations changed samples within a
+    bounded number of attempts. Repeated changed samples are retained.
     """
 
     def __init__(
@@ -73,11 +74,19 @@ class Mutator(Generic[InputT]):
 
     def mutate(
         self, inputs: Iterable[Mapping[str, Any]], max_distance: float, num_mutations: int = 1,
+        max_attempts: int = 100,
     ) -> list[dict[str, Any]]:
-        """Return annotated samples, validating epsilon and every actual distance."""
+        """Collect changed samples, using at most max_attempts calls per input.
+
+        Warn and return fewer samples if the attempt budget is exhausted.
+        Num_Mutations records the requested count; Mutation_Number counts only
+        accepted samples. All attempts mutate the original, not prior samples.
+        """
         max_distance = self.mutation.validate_epsilon(max_distance)
         if isinstance(num_mutations, bool) or not isinstance(num_mutations, int) or num_mutations < 1:
             raise ValueError("num_mutations must be a positive integer")
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+            raise ValueError("max_attempts must be a positive integer")
         # Validate all rows before invoking a potentially expensive mutation.
         inputs = list(inputs)
         for row in inputs:
@@ -87,23 +96,34 @@ class Mutator(Generic[InputT]):
         rows = []
         for row in inputs:
             source = self.input_factory(row[self.input_column])
-            for number in range(1, num_mutations + 1):
+            collected = 0
+            for _ in range(max_attempts):
                 mutated = self.mutation(source, max_distance)
+                if mutated.value == source.value:
+                    continue
+                collected += 1
                 rows.append({
                     **row,
                     self.input_column: mutated.value,
                     self.original_input_column: source.value,
                     "Input_Distance_To_Original_Input": self.mutation.distance(source, mutated),
-                    "Mutation_Number": number,
+                    "Mutation_Number": collected,
                     **self.metadata,
                     "Max_Input_Distance_To_Original_Input": max_distance,
                     "Num_Mutations": num_mutations,
                 })
+                if collected == num_mutations:
+                    break
+            if collected < num_mutations:
+                warnings.warn(
+                    f"Collected {collected}/{num_mutations} changed samples for input {source.value!r} "
+                    f"after {max_attempts} mutation attempts", stacklevel=2,
+                )
         return rows
 
     def mutate_csv(
         self, input_file: str | Path, output_file: str | Path,
-        max_distance: float, num_mutations: int = 1,
+        max_distance: float, num_mutations: int = 1, max_attempts: int = 100,
     ) -> list[dict[str, Any]]:
         """Read source rows and save a prepared CSV only after successful mutation."""
         output = Path(output_file)
@@ -118,7 +138,7 @@ class Mutator(Generic[InputT]):
             inputs = list(reader)
         if any(None in row or any(value is None for value in row.values()) for row in inputs):
             raise ValueError("Source CSV rows must match the header width")
-        rows = self.mutate(inputs, max_distance, num_mutations)
+        rows = self.mutate(inputs, max_distance, num_mutations, max_attempts)
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("w", newline="", encoding="utf-8") as target:
             writer = csv.DictWriter(target, fieldnames=[*columns, *self.added_columns])

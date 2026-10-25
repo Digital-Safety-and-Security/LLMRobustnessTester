@@ -33,15 +33,54 @@ class MutatorTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             source, output = Path(directory) / "inputs.csv", Path(directory) / "mutated.csv"
             source.write_text("input,expected_output\nhello,reference\n", encoding="utf-8")
-            with patch("sys.argv", [str(path), str(source), str(output), "--epsilon", "1", "-n", "2"]), \
+            with patch("sys.argv", [str(path), str(source), str(output), "--epsilon", "1", "-n", "2", "--max-attempts", "1"]), \
                  patch.object(example, "RandomWordsMutation", return_value=AppendMutation()), \
-                 patch.object(example, "WordEditDistance", return_value=WordCountDistance()), patch("builtins.print"):
+                 patch.object(example, "WordEditDistance", return_value=WordCountDistance()), patch("builtins.print"), \
+                 self.assertWarnsRegex(UserWarning, "Collected 1/2"):
                 example.main()
             with output.open(newline="", encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
-            self.assertEqual(len(rows), 2)
+            self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["Original_Input"], "hello")
             self.assertEqual(rows[0]["expected_output"], "reference")
+
+    def test_retries_unchanged_results_per_input_and_keeps_repeated_changes(self):
+        mutation = AppendMutation()
+        attempts = []
+
+        def transform(source, epsilon):
+            attempts.append(source.value)
+            return TextInput(source.value if len(attempts) % 2 else source.value + " changed")
+
+        with patch.object(mutation, "mutate", side_effect=transform):
+            rows = Mutator(mutation).mutate([{"input": "first"}, {"input": "second"}], 1, 2, max_attempts=10)
+        self.assertEqual(attempts, ["first"] * 4 + ["second"] * 4)
+        self.assertEqual([row["input"] for row in rows], ["first changed"] * 2 + ["second changed"] * 2)
+        self.assertEqual([row["Mutation_Number"] for row in rows], [1, 2, 1, 2])
+        self.assertTrue(all(row["Num_Mutations"] == 2 for row in rows))
+
+    def test_attempt_limit_returns_partial_or_no_samples_and_warns(self):
+        mutation = AppendMutation()
+        with patch.object(mutation, "mutate", side_effect=lambda source, epsilon: source) as transform:
+            with self.assertWarnsRegex(UserWarning, "Collected 0/3.*after 100 mutation attempts"):
+                self.assertEqual(Mutator(mutation).mutate([{"input": "unchangeable"}], 1, 3), [])
+            self.assertEqual(transform.call_count, 100)
+        with self.assertWarnsRegex(UserWarning, "Collected 2/3.*after 2 mutation attempts"):
+            rows = Mutator(mutation).mutate([{"input": "hello"}], 1, 3, max_attempts=2)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual([row["Mutation_Number"] for row in rows], [1, 2])
+        self.assertTrue(all(row["Num_Mutations"] == 3 for row in rows))
+        with patch.object(mutation, "mutate", side_effect=ValueError("mutation failure")) as transform:
+            with self.assertRaisesRegex(ValueError, "mutation failure"):
+                Mutator(mutation).mutate([{"input": "hello"}], 1, 3)
+            self.assertEqual(transform.call_count, 1)
+
+    def test_changed_text_is_accepted_even_when_distance_is_zero(self):
+        mutation = AppendMutation()
+        with patch.object(mutation, "mutate", return_value=TextInput("different")):
+            rows = Mutator(mutation).mutate([{"input": "original"}], 0)
+        self.assertEqual(rows[0]["input"], "different")
+        self.assertEqual(rows[0]["Input_Distance_To_Original_Input"], 0)
 
     def test_preserves_references_and_metadata_and_does_not_change_source_rows(self):
         source = [{"input": "always a", "expected_output": "G a", "id": "one"}]
@@ -92,6 +131,9 @@ class MutatorTests(unittest.TestCase):
         for count in (0, -1, 1.5, True):
             with self.subTest(count=count), self.assertRaises(ValueError):
                 mutator.mutate([{"input": "hello"}], 1, count)
+        for attempts in (0, -1, 1.5, True, "2", None):
+            with self.subTest(attempts=attempts), self.assertRaises(ValueError):
+                mutator.mutate([{"input": "hello"}], 1, max_attempts=attempts)
         for row in ({"other": "hello"}, {"input": "hello", "Original_Input": "old"}, {"input": 5}):
             with self.subTest(row=row), self.assertRaises((ValueError, TypeError)):
                 mutator.mutate([{"input": "valid"}, row], 1)
@@ -117,6 +159,13 @@ class MutatorTests(unittest.TestCase):
             self.assertEqual(len(stored), 2)
             self.assertEqual(stored[0]["input"], rows[0]["input"])
             self.assertEqual(stored[0]["expected_output"], "reference")
+            with self.assertWarnsRegex(UserWarning, "Collected 1/2"):
+                rows = mutator.mutate_csv(source, output, 1, 2, max_attempts=1)
+            self.assertEqual(len(rows), 1)
+            with patch.object(mutator.mutation, "mutate", side_effect=lambda source, epsilon: source), \
+                 self.assertWarnsRegex(UserWarning, "Collected 0/2"):
+                self.assertEqual(mutator.mutate_csv(source, output, 1, 2, max_attempts=3), [])
+            self.assertEqual(len(output.read_text().splitlines()), 1)
             source.write_text("input,expected_output\n", encoding="utf-8")
             self.assertEqual(mutator.mutate_csv(source, output, 1), [])
             self.assertEqual(len(output.read_text().splitlines()), 1)

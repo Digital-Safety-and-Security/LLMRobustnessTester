@@ -95,7 +95,7 @@ mutation = RandomWordsMutation("WordSwapQWERTY", distance=WordEditDistance())
 mutator = Mutator(mutation, metadata={"Transformation": "WordSwapQWERTY"})
 rows = mutator.mutate(
     [{"input": "The light must stay on", "expected_output": "some reference"}],
-    max_distance=1, num_mutations=5,
+    max_distance=1, num_mutations=5, max_attempts=100,
 )
 mutator.mutate_csv("inputs.csv", "mutated.csv", max_distance=1, num_mutations=5)
 ```
@@ -106,13 +106,23 @@ column, including any reference outputs. It adds `Original_Input`, per-row
 number, and mutation/distance labels. Column names can be adapted with
 `input_column` and `original_input_column`. Labels default to fully qualified
 class names; optional `metadata` labels record CLI aliases and transformations.
-Repeated and unchanged samples are retained; they are not guaranteed unique.
+Only changed inputs are collected. `max_attempts` (default 100, positive integer)
+caps the total number of mutation calls **per original input**, not per sample.
+Each attempt starts from the original input. Unchanged results are discarded
+and retried until `num_mutations` samples have been collected or the budget is
+exhausted. Repeated changed samples still count; uniqueness is not guaranteed.
+On exhaustion, a warning reports the shortfall and the collected rows are
+returned, possibly none. `Num_Mutations` remains the requested count;
+`Mutation_Number` numbers accepted samples consecutively from 1.
+`mutate_csv()` accepts the same `max_attempts` argument. The CSV schema is
+unchanged; an original with no successful mutations has no rows in that CSV.
 
 The batch example uses the same class and standard-library CSV handling:
 
 ```bash
 python -m pip install -e .
 python examples/mutate_batch.py inputs.csv mutated.csv --max-distance 1 -n 5 --transformation WordSwapQWERTY
+python examples/mutate_batch.py inputs.csv mutated.csv --max-distance 1 -n 5 --max-attempts 200
 ```
 
 Use `--input-column text` for a differently named source column. TextAttack
@@ -154,7 +164,14 @@ or project-specific `Output` subclasses. Inject any library or project-specific
 must return one generated value per row in the same order.
 
 `run()` returns final `Results`, an `Iterations` history, the maximum tested
-passing epsilon, and a stop reason. Results preserve source columns and add
+passing epsilon, and a stop reason. In `max-delta` mode, `Iterations[0]`
+contains all three output-distance estimates: `Max_Delta`, `Average_Delta`,
+and `Percentile_Delta`, regardless of `threshold_check`. The percentile uses
+`max_exceedance_percentage` (default 5), also recorded in the observation as
+`Max_Exceedance_Percentage`. Search observations include these same estimates;
+`threshold_check` only selects `Checked_Delta` for threshold decisions.
+The example prints this summary as JSON in either mode; no additional pipeline
+calls are needed to compute the three estimates. Results preserve source columns and add
 `Expected_Output`, `Generated_Output`, the output-distance measure, and distances
 to both expected and original outputs. Each original runs once per call to
 `run()` by default, with independent caches between runs. In epsilon search,
@@ -197,6 +214,8 @@ For fresh sampling at every search step, supply
 `generate_mutations(epsilon, iteration)`, returning prepared rows using a
 `Mutator` or another generator. Previous observations are retained. Without a
 generator, search is limited by each original's recorded generation coverage.
+Empty generated batches are allowed: search retains its existing samples and
+continues to larger epsilon bounds, which may allow successful mutations.
 An optional `on_iteration(iteration, epsilon, results, observation)` callback
 can save result CSVs and add file paths to the observation; no storage format is
 imposed on model-specific results.
